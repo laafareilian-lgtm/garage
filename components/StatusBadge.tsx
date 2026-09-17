@@ -3,10 +3,16 @@ import {
   DevisStatutMeta,
   FactureStatutMeta,
   InterventionStatutMeta,
+  PieceCommandeeStatutMeta,
   StatusColors,
   type StatusTone,
 } from '@/constants/theme';
-import type { DevisStatut, FactureStatut, InterventionStatut } from '@/types';
+import type {
+  DevisStatut,
+  FactureStatut,
+  InterventionStatut,
+  PieceCommandeeStatut,
+} from '@/types';
 
 type Props = {
   label: string;
@@ -34,6 +40,11 @@ export function DevisBadge({ statut }: { statut: DevisStatut }) {
 
 export function FactureBadge({ statut }: { statut: FactureStatut }) {
   const meta = FactureStatutMeta[statut];
+  return <StatusBadge label={meta.label} tone={meta.tone} />;
+}
+
+export function PieceBadge({ statut }: { statut: PieceCommandeeStatut }) {
+  const meta = PieceCommandeeStatutMeta[statut];
   return <StatusBadge label={meta.label} tone={meta.tone} />;
 }
 

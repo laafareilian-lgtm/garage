@@ -106,7 +106,7 @@ export default function VehiculeScreen() {
               <InterventionBadge statut={item.statut} />
             </View>
             <Text style={styles.motif} numberOfLines={2}>
-              {item.motif}
+              {item.motifDeclare}
             </Text>
           </Pressable>
         )}

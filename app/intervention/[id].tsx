@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import {
   Alert,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -10,34 +11,66 @@ import {
 } from 'react-native';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { EmptyState, LoadingState } from '@/components/EmptyState';
-import { ChipSelect, PrimaryButton } from '@/components/Form';
+import {
+  buildEtatDesLieux,
+  EtatDesLieuxFields,
+  EtatDesLieuxLecture,
+} from '@/components/EtatDesLieuxFields';
+import { ChipSelect, FormField, PrimaryButton } from '@/components/Form';
 import {
   DevisBadge,
   FactureBadge,
   InterventionBadge,
+  PieceBadge,
 } from '@/components/StatusBadge';
 import { Colors, InterventionStatutMeta } from '@/constants/theme';
 import { garageService } from '@/data/garageService';
 import { calculerLigne } from '@/utils/calculs';
-import { formatDate, formatMontant } from '@/utils/format';
+import { addDaysISO, formatDate, formatMontant, todayISO } from '@/utils/format';
 import type {
   Devis,
   Facture,
   InterventionEnrichie,
   InterventionStatut,
-  Piece,
+  NiveauCarburant,
+  PieceCommandee,
+  PieceCommandeeStatut,
 } from '@/types';
+
+const NEXT_PIECE: Record<PieceCommandeeStatut, PieceCommandeeStatut | null> = {
+  a_commander: 'commandee',
+  commandee: 'recue',
+  recue: null,
+};
 
 export default function InterventionDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const [item, setItem] = useState<InterventionEnrichie | null>(null);
-  const [devis, setDevis] = useState<Devis | null>(null);
+  const [devisList, setDevisList] = useState<Devis[]>([]);
   const [facture, setFacture] = useState<Facture | null>(null);
+  const [piecesCmd, setPiecesCmd] = useState<PieceCommandee[]>([]);
   const [loading, setLoading] = useState(true);
+  const [diagnostic, setDiagnostic] = useState('');
   const [travaux, setTravaux] = useState('');
-  const [pieces, setPieces] = useState<Piece[]>([]);
   const [saving, setSaving] = useState(false);
+
+  const [showSortie, setShowSortie] = useState(false);
+  const [etatSortieForm, setEtatSortieForm] = useState({
+    kilometrage: '',
+    niveauCarburant: '1/2' as NiveauCarburant,
+    degatsExistants: '',
+    photos: [] as string[],
+  });
+
+  const [showRappel, setShowRappel] = useState(false);
+  const [rappelDate, setRappelDate] = useState(addDaysISO(180));
+  const [rappelMotif, setRappelMotif] = useState('');
+
+  const [showPieceForm, setShowPieceForm] = useState(false);
+  const [pieceNom, setPieceNom] = useState('');
+  const [pieceFournisseur, setPieceFournisseur] = useState('');
+  const [piecePrix, setPiecePrix] = useState('');
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -45,17 +78,16 @@ export default function InterventionDetailScreen() {
       const intervention = await garageService.getInterventionById(id);
       setItem(intervention);
       if (intervention) {
+        setDiagnostic(intervention.diagnostic ?? '');
         setTravaux(intervention.travauxEffectues);
-        setPieces([...intervention.pieces]);
-        if (intervention.devisId) {
-          const d = await garageService.getDevisById(intervention.devisId);
-          setDevis(d);
-        } else {
-          setDevis(null);
-        }
+        const [devis, pieces] = await Promise.all([
+          garageService.listDevisByIntervention(intervention.id),
+          garageService.listPiecesCommandees(intervention.id),
+        ]);
+        setDevisList(devis);
+        setPiecesCmd(pieces);
         if (intervention.factureId) {
-          const f = await garageService.getFactureById(intervention.factureId);
-          setFacture(f);
+          setFacture(await garageService.getFactureById(intervention.factureId));
         } else {
           setFacture(null);
         }
@@ -71,15 +103,15 @@ export default function InterventionDetailScreen() {
     }, [load])
   );
 
-  async function saveTravauxPieces() {
+  async function saveDiagnosticTravaux() {
     if (!item) return;
     setSaving(true);
     try {
+      await garageService.updateDiagnostic(item.id, diagnostic);
       await garageService.updateIntervention(item.id, {
         travauxEffectues: travaux,
-        pieces,
       });
-      Alert.alert('Enregistré', 'Travaux et pièces mis à jour.');
+      Alert.alert('Enregistré', 'Diagnostic et travaux mis à jour.');
       await load();
     } catch (e) {
       Alert.alert('Erreur', e instanceof Error ? e.message : 'Échec');
@@ -91,14 +123,98 @@ export default function InterventionDetailScreen() {
   async function changeStatut(statut: string) {
     if (!item) return;
     try {
-      const patch: {
-        statut: InterventionStatut;
-        dateSortieReelle?: string;
-      } = { statut: statut as InterventionStatut };
+      const patch: UpdatePatch = {
+        statut: statut as InterventionStatut,
+      };
       if (statut === 'recupere' && !item.dateSortieReelle) {
-        patch.dateSortieReelle = new Date().toISOString().slice(0, 10);
+        patch.dateSortieReelle = todayISO();
       }
       await garageService.updateIntervention(item.id, patch);
+      await load();
+      if (statut === 'recupere') {
+        setShowRappel(true);
+      }
+      if (statut === 'termine' && !item.etatSortie) {
+        setEtatSortieForm({
+          kilometrage: String(item.etatEntree.kilometrage),
+          niveauCarburant: item.etatEntree.niveauCarburant,
+          degatsExistants: '',
+          photos: [],
+        });
+      }
+    } catch (e) {
+      Alert.alert('Erreur', e instanceof Error ? e.message : 'Échec');
+    }
+  }
+
+  type UpdatePatch = {
+    statut: InterventionStatut;
+    dateSortieReelle?: string;
+  };
+
+  async function saveEtatSortie() {
+    if (!item) return;
+    const etat = buildEtatDesLieux(etatSortieForm, todayISO());
+    if (!etat) {
+      Alert.alert('Kilométrage requis');
+      return;
+    }
+    try {
+      await garageService.setEtatSortie(item.id, etat);
+      setShowSortie(false);
+      await load();
+    } catch (e) {
+      Alert.alert('Erreur', e instanceof Error ? e.message : 'Échec');
+    }
+  }
+
+  async function saveRappel() {
+    if (!item) return;
+    if (!rappelMotif.trim() || !rappelDate.trim()) {
+      Alert.alert('Rappel', 'Date et motif sont requis.');
+      return;
+    }
+    try {
+      await garageService.setRappelEntretien(item.id, {
+        dateRappel: rappelDate.trim(),
+        motif: rappelMotif.trim(),
+      });
+      setShowRappel(false);
+      await load();
+    } catch (e) {
+      Alert.alert('Erreur', e instanceof Error ? e.message : 'Échec');
+    }
+  }
+
+  async function advancePiece(piece: PieceCommandee) {
+    const next = NEXT_PIECE[piece.statut];
+    if (!next) return;
+    try {
+      await garageService.updatePieceStatut(piece.id, next);
+      await load();
+    } catch (e) {
+      Alert.alert('Erreur', e instanceof Error ? e.message : 'Échec');
+    }
+  }
+
+  async function addPiece() {
+    if (!item || !pieceNom.trim()) {
+      Alert.alert('Nom requis');
+      return;
+    }
+    try {
+      await garageService.createPieceCommandee({
+        interventionId: item.id,
+        nom: pieceNom.trim(),
+        fournisseur: pieceFournisseur.trim() || undefined,
+        prixUnitaireEstime: piecePrix
+          ? parseFloat(piecePrix.replace(',', '.'))
+          : undefined,
+      });
+      setPieceNom('');
+      setPieceFournisseur('');
+      setPiecePrix('');
+      setShowPieceForm(false);
       await load();
     } catch (e) {
       Alert.alert('Erreur', e instanceof Error ? e.message : 'Échec');
@@ -109,8 +225,8 @@ export default function InterventionDetailScreen() {
     if (!item) return;
     try {
       const lignes =
-        pieces.length > 0
-          ? pieces.map((p) =>
+        item.pieces.length > 0
+          ? item.pieces.map((p) =>
               calculerLigne(p.nom, p.quantite, p.prixUnitaire ?? 0)
             )
           : [calculerLigne('Main-d’œuvre', 1, 65)];
@@ -121,10 +237,21 @@ export default function InterventionDetailScreen() {
     }
   }
 
-  async function genererFacture() {
-    if (!devis) return;
+  async function addComplementaire() {
+    if (!item) return;
     try {
-      const created = await garageService.genererFactureDepuisDevis(devis.id);
+      const created = await garageService.addDevisComplementaire(item.id, [
+        calculerLigne('Prestation complémentaire', 1, 0),
+      ]);
+      router.push(`/devis/${created.id}`);
+    } catch (e) {
+      Alert.alert('Erreur', e instanceof Error ? e.message : 'Échec');
+    }
+  }
+
+  async function genererFacture(devisId: string) {
+    try {
+      const created = await garageService.genererFactureDepuisDevis(devisId);
       router.push(`/facture/${created.id}`);
     } catch (e) {
       Alert.alert('Erreur', e instanceof Error ? e.message : 'Échec');
@@ -134,23 +261,13 @@ export default function InterventionDetailScreen() {
   async function createFactureDirecte() {
     if (!item) return;
     try {
-      const lignes =
-        pieces.length > 0
-          ? pieces.map((p) =>
-              calculerLigne(p.nom, p.quantite, p.prixUnitaire ?? 0)
-            )
-          : [calculerLigne('Prestation', 1, 0)];
-      const created = await garageService.createFactureDirecte(item.id, lignes);
+      const created = await garageService.createFactureDirecte(item.id, [
+        calculerLigne('Prestation', 1, 0),
+      ]);
       router.push(`/facture/${created.id}`);
     } catch (e) {
       Alert.alert('Erreur', e instanceof Error ? e.message : 'Échec');
     }
-  }
-
-  function updatePiece(index: number, patch: Partial<Piece>) {
-    setPieces((prev) =>
-      prev.map((p, i) => (i === index ? { ...p, ...patch } : p))
-    );
   }
 
   if (loading) return <LoadingState />;
@@ -159,6 +276,7 @@ export default function InterventionDetailScreen() {
   const statutOptions = Object.entries(InterventionStatutMeta).map(
     ([value, meta]) => ({ value, label: meta.label })
   );
+  const devisAccepte = devisList.find((d) => d.statut === 'accepte');
 
   return (
     <ScrollView
@@ -182,11 +300,7 @@ export default function InterventionDetailScreen() {
           {item.dateSortiePrevue
             ? ` · Prévue ${formatDate(item.dateSortiePrevue)}`
             : ''}
-          {item.dateSortieReelle
-            ? ` · Sortie ${formatDate(item.dateSortieReelle)}`
-            : ''}
         </Text>
-        <Text style={styles.motif}>{item.motif}</Text>
       </View>
 
       <Text style={styles.section}>Statut</Text>
@@ -194,6 +308,22 @@ export default function InterventionDetailScreen() {
         options={statutOptions}
         value={item.statut}
         onChange={changeStatut}
+      />
+
+      <Text style={styles.section}>Motif déclaré</Text>
+      <View style={styles.card}>
+        <Text style={styles.body}>{item.motifDeclare}</Text>
+      </View>
+
+      <Text style={styles.section}>Diagnostic</Text>
+      <TextInput
+        style={styles.textarea}
+        value={diagnostic}
+        onChangeText={setDiagnostic}
+        multiline
+        placeholder="Ce que vous constatez après examen…"
+        placeholderTextColor={Colors.textMuted}
+        textAlignVertical="top"
       />
 
       <Text style={styles.section}>Travaux effectués</Text>
@@ -206,83 +336,125 @@ export default function InterventionDetailScreen() {
         placeholderTextColor={Colors.textMuted}
         textAlignVertical="top"
       />
-
-      <Text style={styles.section}>Pièces</Text>
-      {pieces.map((p, index) => (
-        <View key={`${index}-${p.nom}`} style={styles.pieceRow}>
-          <TextInput
-            style={[styles.pieceInput, { flex: 1.6 }]}
-            value={p.nom}
-            onChangeText={(nom) => updatePiece(index, { nom })}
-            placeholder="Nom"
-            placeholderTextColor={Colors.textMuted}
-          />
-          <TextInput
-            style={styles.pieceInput}
-            value={String(p.quantite)}
-            onChangeText={(t) =>
-              updatePiece(index, {
-                quantite: parseFloat(t.replace(',', '.')) || 0,
-              })
-            }
-            keyboardType="decimal-pad"
-            placeholder="Qté"
-            placeholderTextColor={Colors.textMuted}
-          />
-          <TextInput
-            style={styles.pieceInput}
-            value={p.prixUnitaire != null ? String(p.prixUnitaire) : ''}
-            onChangeText={(t) =>
-              updatePiece(index, {
-                prixUnitaire: t
-                  ? parseFloat(t.replace(',', '.')) || 0
-                  : undefined,
-              })
-            }
-            keyboardType="decimal-pad"
-            placeholder="Prix"
-            placeholderTextColor={Colors.textMuted}
-          />
-          <Pressable
-            onPress={() => setPieces((prev) => prev.filter((_, i) => i !== index))}
-          >
-            <Text style={styles.remove}>✕</Text>
-          </Pressable>
-        </View>
-      ))}
-      <Pressable
-        onPress={() =>
-          setPieces((prev) => [...prev, { nom: '', quantite: 1, prixUnitaire: 0 }])
-        }
-      >
-        <Text style={styles.addLink}>+ Ajouter une pièce</Text>
-      </Pressable>
-
       <PrimaryButton
-        title={saving ? 'Enregistrement…' : 'Enregistrer travaux & pièces'}
-        onPress={saveTravauxPieces}
+        title={saving ? 'Enregistrement…' : 'Enregistrer diagnostic & travaux'}
+        onPress={saveDiagnosticTravaux}
         disabled={saving}
         variant="secondary"
       />
 
-      <Text style={styles.section}>Devis & facture</Text>
+      <Text style={styles.section}>État des lieux</Text>
+      <EtatDesLieuxLecture etat={item.etatEntree} title="À l’entrée" />
+      {item.etatSortie ? (
+        <EtatDesLieuxLecture etat={item.etatSortie} title="À la sortie" />
+      ) : item.statut === 'termine' || item.statut === 'recupere' ? (
+        <PrimaryButton
+          title="Constater l’état de sortie"
+          onPress={() => {
+            setEtatSortieForm({
+              kilometrage: String(item.etatEntree.kilometrage),
+              niveauCarburant: item.etatEntree.niveauCarburant,
+              degatsExistants: '',
+              photos: [],
+            });
+            setShowSortie(true);
+          }}
+        />
+      ) : null}
+
+      <Text style={styles.section}>Pièces nécessaires</Text>
       <View style={styles.docCard}>
-        {devis ? (
-          <Pressable onPress={() => router.push(`/devis/${devis.id}`)}>
-            <View style={styles.row}>
-              <Text style={styles.docNum}>{devis.numero}</Text>
-              <DevisBadge statut={devis.statut} />
-            </View>
-            <Text style={styles.docAmt}>{formatMontant(devis.totalTTC)}</Text>
-          </Pressable>
+        {piecesCmd.length === 0 ? (
+          <Text style={styles.meta}>Aucune pièce suivie.</Text>
         ) : (
-          <PrimaryButton title="Créer un devis" onPress={createDevis} />
+          piecesCmd.map((p) => (
+            <View key={p.id} style={styles.pieceItem}>
+              <View style={{ flex: 1, gap: 4 }}>
+                <Text style={styles.docNum}>{p.nom}</Text>
+                {p.fournisseur ? (
+                  <Text style={styles.meta}>{p.fournisseur}</Text>
+                ) : null}
+                <PieceBadge statut={p.statut} />
+              </View>
+              {NEXT_PIECE[p.statut] ? (
+                <Pressable
+                  style={styles.smallBtn}
+                  onPress={() => advancePiece(p)}
+                >
+                  <Text style={styles.smallBtnText}>
+                    → {NEXT_PIECE[p.statut] === 'commandee' ? 'Commander' : 'Reçue'}
+                  </Text>
+                </Pressable>
+              ) : null}
+            </View>
+          ))
+        )}
+        {showPieceForm ? (
+          <View style={{ gap: 8 }}>
+            <FormField
+              label="Nom"
+              value={pieceNom}
+              onChangeText={setPieceNom}
+              placeholder="Plaquettes AV"
+            />
+            <FormField
+              label="Fournisseur"
+              value={pieceFournisseur}
+              onChangeText={setPieceFournisseur}
+              placeholder="Optionnel"
+            />
+            <FormField
+              label="Prix estimé"
+              value={piecePrix}
+              onChangeText={setPiecePrix}
+              keyboardType="decimal-pad"
+              placeholder="0"
+            />
+            <PrimaryButton title="Ajouter" onPress={addPiece} />
+          </View>
+        ) : (
+          <Pressable onPress={() => setShowPieceForm(true)}>
+            <Text style={styles.addLink}>+ Ajouter une pièce à suivre</Text>
+          </Pressable>
+        )}
+      </View>
+
+      <Text style={styles.section}>Devis liés</Text>
+      <View style={styles.docCard}>
+        {devisList.length === 0 ? (
+          <PrimaryButton title="Créer un devis initial" onPress={createDevis} />
+        ) : (
+          <>
+            {devisList.map((d) => (
+              <Pressable
+                key={d.id}
+                onPress={() => router.push(`/devis/${d.id}`)}
+                style={styles.devisRow}
+              >
+                <View style={{ flex: 1, gap: 4 }}>
+                  <Text style={styles.docNum}>
+                    {d.numero}{' '}
+                    <Text style={styles.typeTag}>
+                      {d.type === 'initial' ? 'initial' : 'complément'}
+                    </Text>
+                  </Text>
+                  <Text style={styles.docAmt}>{formatMontant(d.totalTTC)}</Text>
+                </View>
+                <DevisBadge statut={d.statut} />
+              </Pressable>
+            ))}
+            <PrimaryButton
+              title="+ Ajouter un devis complémentaire"
+              onPress={addComplementaire}
+              variant="secondary"
+            />
+          </>
         )}
 
-        {devis?.statut === 'accepte' && !facture ? (
+        {devisAccepte && !facture ? (
           <PrimaryButton
-            title="Générer la facture"
-            onPress={genererFacture}
+            title={`Générer facture (${devisAccepte.numero})`}
+            onPress={() => genererFacture(devisAccepte.id)}
           />
         ) : null}
 
@@ -294,7 +466,7 @@ export default function InterventionDetailScreen() {
             </View>
             <Text style={styles.docAmt}>{formatMontant(facture.totalTTC)}</Text>
           </Pressable>
-        ) : !devis ? (
+        ) : devisList.length === 0 ? (
           <PrimaryButton
             title="Créer une facture directe"
             onPress={createFactureDirecte}
@@ -302,6 +474,69 @@ export default function InterventionDetailScreen() {
           />
         ) : null}
       </View>
+
+      {item.rappelEntretien ? (
+        <>
+          <Text style={styles.section}>Rappel d’entretien</Text>
+          <View style={styles.card}>
+            <Text style={styles.body}>{item.rappelEntretien.motif}</Text>
+            <Text style={styles.meta}>
+              Prévu le {formatDate(item.rappelEntretien.dateRappel)}
+            </Text>
+          </View>
+        </>
+      ) : item.statut === 'recupere' ? (
+        <PrimaryButton
+          title="Définir un rappel d’entretien"
+          onPress={() => setShowRappel(true)}
+          variant="secondary"
+        />
+      ) : null}
+
+      <Modal visible={showSortie} animationType="slide" transparent>
+        <View style={styles.modalBg}>
+          <ScrollView contentContainerStyle={styles.modalCard}>
+            <Text style={styles.modalTitle}>État de sortie</Text>
+            <EtatDesLieuxFields
+              value={etatSortieForm}
+              onChange={setEtatSortieForm}
+            />
+            <PrimaryButton title="Enregistrer" onPress={saveEtatSortie} />
+            <PrimaryButton
+              title="Annuler"
+              onPress={() => setShowSortie(false)}
+              variant="secondary"
+            />
+          </ScrollView>
+        </View>
+      </Modal>
+
+      <Modal visible={showRappel} animationType="slide" transparent>
+        <View style={styles.modalBg}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Rappel d’entretien</Text>
+            <FormField
+              label="Date (AAAA-MM-JJ)"
+              value={rappelDate}
+              onChangeText={setRappelDate}
+              autoCapitalize="none"
+            />
+            <FormField
+              label="Motif"
+              value={rappelMotif}
+              onChangeText={setRappelMotif}
+              placeholder="Vidange dans 6 mois"
+              multiline
+            />
+            <PrimaryButton title="Enregistrer le rappel" onPress={saveRappel} />
+            <PrimaryButton
+              title="Plus tard"
+              onPress={() => setShowRappel(false)}
+              variant="secondary"
+            />
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
@@ -326,13 +561,8 @@ const styles = StyleSheet.create({
   plaque: { fontSize: 20, fontWeight: '800', color: Colors.primary },
   vehicle: { fontSize: 15, fontWeight: '600', color: Colors.text },
   client: { fontSize: 14, color: Colors.textMuted },
-  meta: { fontSize: 13, color: Colors.textMuted, marginTop: 4 },
-  motif: {
-    marginTop: 8,
-    fontSize: 15,
-    color: Colors.text,
-    lineHeight: 22,
-  },
+  meta: { fontSize: 13, color: Colors.textMuted },
+  body: { fontSize: 15, color: Colors.text, lineHeight: 22 },
   section: {
     marginTop: 4,
     fontSize: 13,
@@ -341,7 +571,7 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
   textarea: {
-    minHeight: 100,
+    minHeight: 90,
     backgroundColor: Colors.surface,
     borderWidth: 1,
     borderColor: Colors.border,
@@ -350,20 +580,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: Colors.text,
   },
-  pieceRow: { flexDirection: 'row', gap: 6, alignItems: 'center' },
-  pieceInput: {
-    flex: 1,
-    backgroundColor: Colors.surface,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: 8,
-    paddingHorizontal: 8,
-    paddingVertical: 8,
-    fontSize: 14,
-    color: Colors.text,
-  },
-  remove: { color: Colors.danger, fontWeight: '700', padding: 6 },
-  addLink: { color: Colors.accent, fontWeight: '700', fontSize: 15 },
   docCard: {
     backgroundColor: Colors.surface,
     borderRadius: 12,
@@ -372,6 +588,54 @@ const styles = StyleSheet.create({
     borderColor: Colors.border,
     gap: 12,
   },
+  pieceItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  devisRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
   docNum: { fontWeight: '800', color: Colors.primary, fontSize: 15 },
-  docAmt: { fontWeight: '700', color: Colors.text, marginTop: 4 },
+  docAmt: { fontWeight: '700', color: Colors.text, fontSize: 14 },
+  typeTag: {
+    fontWeight: '600',
+    fontSize: 12,
+    color: Colors.textMuted,
+  },
+  addLink: { color: Colors.accent, fontWeight: '700', fontSize: 15 },
+  smallBtn: {
+    backgroundColor: Colors.primarySoft,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  smallBtnText: { color: Colors.primary, fontWeight: '700', fontSize: 12 },
+  modalBg: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'flex-end',
+  },
+  modalCard: {
+    backgroundColor: Colors.background,
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    padding: 20,
+    gap: 12,
+    maxHeight: '90%',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: Colors.text,
+    marginBottom: 4,
+  },
 });

@@ -12,9 +12,11 @@ export const Colors = {
   fab: '#1E3A5F',
 };
 
-/** Couleurs de badges — cohérentes intervention / devis / facture */
+/** Couleurs de badges — cohérentes intervention / devis / facture / pièces */
 export const StatusColors = {
+  violet: { bg: '#EDE9FE', text: '#6D28D9', border: '#8B5CF6' },
   orange: { bg: '#FEF3C7', text: '#B45309', border: '#F59E0B' },
+  ambre: { bg: '#FEF9C3', text: '#A16207', border: '#EAB308' },
   bleu: { bg: '#DBEAFE', text: '#1D4ED8', border: '#3B82F6' },
   vert: { bg: '#D1FAE5', text: '#047857', border: '#10B981' },
   rouge: { bg: '#FEE2E2', text: '#B91C1C', border: '#EF4444' },
@@ -27,10 +29,21 @@ export const InterventionStatutMeta: Record<
   string,
   { label: string; tone: StatusTone }
 > = {
-  en_attente: { label: 'En attente', tone: 'orange' },
+  diagnostic: { label: 'Diagnostic', tone: 'violet' },
+  attente_validation_devis: { label: 'Attente devis', tone: 'orange' },
+  attente_pieces: { label: 'Attente pièces', tone: 'ambre' },
   en_cours: { label: 'En cours', tone: 'bleu' },
   termine: { label: 'Terminé', tone: 'vert' },
   recupere: { label: 'Récupéré', tone: 'gris' },
+};
+
+export const PieceCommandeeStatutMeta: Record<
+  string,
+  { label: string; tone: StatusTone }
+> = {
+  a_commander: { label: 'À commander', tone: 'orange' },
+  commandee: { label: 'Commandée', tone: 'bleu' },
+  recue: { label: 'Reçue', tone: 'vert' },
 };
 
 export const DevisStatutMeta: Record<
@@ -51,3 +64,14 @@ export const FactureStatutMeta: Record<
   payee: { label: 'Payée', tone: 'vert' },
   annulee: { label: 'Annulée', tone: 'gris' },
 };
+
+export const NiveauCarburantOptions: {
+  value: string;
+  label: string;
+}[] = [
+  { value: 'reserve', label: 'Réserve' },
+  { value: '1/4', label: '1/4' },
+  { value: '1/2', label: '1/2' },
+  { value: '3/4', label: '3/4' },
+  { value: 'plein', label: 'Plein' },
+];

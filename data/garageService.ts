@@ -4,21 +4,36 @@ import type {
   Client,
   CreateClientInput,
   CreateInterventionInput,
+  CreatePieceCommandeeInput,
   CreateVehiculeInput,
   Devis,
   DevisStatut,
   DocumentEnrichi,
+  EtatDesLieux,
   Facture,
   FactureStatut,
   Intervention,
   InterventionEnrichie,
   LigneDocument,
+  PieceCommandee,
+  PieceCommandeeEnrichie,
+  PieceCommandeeStatut,
+  RappelEnrichi,
+  RappelEntretien,
   UpdateInterventionInput,
   Vehicule,
 } from '@/types';
 import * as store from './mockStore';
 
 const DELAY_MS = 280;
+
+const ACTIFS: Intervention['statut'][] = [
+  'diagnostic',
+  'attente_validation_devis',
+  'attente_pieces',
+  'en_cours',
+  'termine',
+];
 
 function wait(ms = DELAY_MS): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -36,17 +51,28 @@ function enrichIntervention(i: Intervention): InterventionEnrichie {
   return { ...i, vehicule, client };
 }
 
-function enrichDocument(
-  interventionId: string
-): DocumentEnrichi {
+function enrichDocument(interventionId: string): DocumentEnrichi {
   const intervention = store.interventions.find((i) => i.id === interventionId);
   if (!intervention) throw new Error('Intervention introuvable');
   const { vehicule, client } = enrichIntervention(intervention);
   return { intervention, vehicule, client };
 }
 
+function enrichPiece(p: PieceCommandee): PieceCommandeeEnrichie {
+  const intervention = store.interventions.find((i) => i.id === p.interventionId);
+  if (!intervention) throw new Error('Intervention introuvable');
+  const { vehicule, client } = enrichIntervention(intervention);
+  return { ...p, intervention, vehicule, client };
+}
+
 function normalizeLignes(lignes: LigneDocument[]): LigneDocument[] {
   return lignes.map(recalculerLigne);
+}
+
+function requireIntervention(id: string): Intervention {
+  const found = store.interventions.find((i) => i.id === id);
+  if (!found) throw new Error('Intervention introuvable');
+  return found;
 }
 
 /** SEULE porte d'entrée données — à remplacer plus tard par supabase-js. */
@@ -76,7 +102,9 @@ export const garageService = {
     return list.sort((a, b) => a.plaque.localeCompare(b.plaque, 'fr'));
   },
 
-  async getVehiculeById(id: string): Promise<(Vehicule & { client: Client }) | null> {
+  async getVehiculeById(
+    id: string
+  ): Promise<(Vehicule & { client: Client }) | null> {
     await wait();
     const vehicule = store.vehicules.find((v) => v.id === id);
     if (!vehicule) return null;
@@ -105,13 +133,15 @@ export const garageService = {
   async listInterventionsActives(): Promise<InterventionEnrichie[]> {
     await wait();
     const ordre: Record<string, number> = {
-      en_attente: 0,
-      en_cours: 1,
-      termine: 2,
-      recupere: 3,
+      diagnostic: 0,
+      attente_validation_devis: 1,
+      attente_pieces: 2,
+      en_cours: 3,
+      termine: 4,
+      recupere: 5,
     };
     return store.interventions
-      .filter((i) => i.statut === 'en_attente' || i.statut === 'en_cours' || i.statut === 'termine')
+      .filter((i) => ACTIFS.includes(i.statut))
       .map(enrichIntervention)
       .sort((a, b) => {
         const d = (ordre[a.statut] ?? 9) - (ordre[b.statut] ?? 9);
@@ -126,19 +156,24 @@ export const garageService = {
     return found ? enrichIntervention(found) : null;
   },
 
-  async createIntervention(data: CreateInterventionInput): Promise<Intervention> {
+  async createIntervention(
+    data: CreateInterventionInput
+  ): Promise<Intervention> {
     await wait();
     const intervention: Intervention = {
       id: store.nextId('int'),
       travauxEffectues: data.travauxEffectues ?? '',
       pieces: data.pieces ?? [],
-      statut: data.statut ?? 'en_attente',
+      statut: data.statut ?? 'diagnostic',
+      devisIds: [],
       vehiculeId: data.vehiculeId,
       dateEntree: data.dateEntree,
       dateSortiePrevue: data.dateSortiePrevue,
       dateSortieReelle: data.dateSortieReelle,
-      motif: data.motif,
+      motifDeclare: data.motifDeclare,
+      diagnostic: data.diagnostic,
       notes: data.notes,
+      etatEntree: data.etatEntree,
     };
     store.interventions.unshift(intervention);
     return intervention;
@@ -155,6 +190,98 @@ export const garageService = {
     return store.interventions[idx];
   },
 
+  async updateDiagnostic(
+    interventionId: string,
+    texte: string
+  ): Promise<Intervention> {
+    await wait();
+    const intervention = requireIntervention(interventionId);
+    intervention.diagnostic = texte;
+    return intervention;
+  },
+
+  async setEtatSortie(
+    interventionId: string,
+    etatDesLieux: EtatDesLieux
+  ): Promise<Intervention> {
+    await wait();
+    const intervention = requireIntervention(interventionId);
+    intervention.etatSortie = etatDesLieux;
+    return intervention;
+  },
+
+  async setRappelEntretien(
+    interventionId: string,
+    data: RappelEntretien
+  ): Promise<Intervention> {
+    await wait();
+    const intervention = requireIntervention(interventionId);
+    intervention.rappelEntretien = data;
+    return intervention;
+  },
+
+  async listRappelsAVenir(): Promise<RappelEnrichi[]> {
+    await wait();
+    return store.interventions
+      .filter((i) => i.rappelEntretien)
+      .map((i) => {
+        const enriched = enrichIntervention(i);
+        return {
+          intervention: enriched,
+          dateRappel: i.rappelEntretien!.dateRappel,
+          motif: i.rappelEntretien!.motif,
+        };
+      })
+      .sort((a, b) => a.dateRappel.localeCompare(b.dateRappel));
+  },
+
+  async listPiecesCommandees(
+    interventionId?: string
+  ): Promise<PieceCommandeeEnrichie[]> {
+    await wait();
+    const list = interventionId
+      ? store.piecesCommandees.filter((p) => p.interventionId === interventionId)
+      : [...store.piecesCommandees];
+    return list.map(enrichPiece);
+  },
+
+  async createPieceCommandee(
+    data: CreatePieceCommandeeInput
+  ): Promise<PieceCommandee> {
+    await wait();
+    requireIntervention(data.interventionId);
+    const piece: PieceCommandee = {
+      id: store.nextId('pc'),
+      statut: data.statut ?? 'a_commander',
+      interventionId: data.interventionId,
+      nom: data.nom,
+      fournisseur: data.fournisseur,
+      dateCommande: data.dateCommande,
+      dateLivraisonPrevue: data.dateLivraisonPrevue,
+      dateReceptionReelle: data.dateReceptionReelle,
+      prixUnitaireEstime: data.prixUnitaireEstime,
+    };
+    store.piecesCommandees.push(piece);
+    return piece;
+  },
+
+  async updatePieceStatut(
+    id: string,
+    statut: PieceCommandeeStatut
+  ): Promise<PieceCommandee> {
+    await wait();
+    const piece = store.piecesCommandees.find((p) => p.id === id);
+    if (!piece) throw new Error('Pièce introuvable');
+    piece.statut = statut;
+    if (statut === 'commandee' && !piece.dateCommande) {
+      piece.dateCommande = todayISO();
+    }
+    if (statut === 'recue' && !piece.dateReceptionReelle) {
+      piece.dateReceptionReelle = todayISO();
+    }
+    return piece;
+  },
+
   async listDevis(): Promise<(Devis & DocumentEnrichi)[]> {
     await wait();
     return [...store.devis]
@@ -169,15 +296,26 @@ export const garageService = {
     return { ...d, ...enrichDocument(d.interventionId) };
   },
 
+  async listDevisByIntervention(
+    interventionId: string
+  ): Promise<(Devis & DocumentEnrichi)[]> {
+    await wait();
+    return store.devis
+      .filter((d) => d.interventionId === interventionId)
+      .map((d) => ({ ...d, ...enrichDocument(d.interventionId) }))
+      .sort((a, b) => a.dateCreation.localeCompare(b.dateCreation));
+  },
+
   async createDevis(
     interventionId: string,
     lignes: LigneDocument[]
   ): Promise<Devis> {
     await wait();
-    const intervention = store.interventions.find((i) => i.id === interventionId);
-    if (!intervention) throw new Error('Intervention introuvable');
-    if (intervention.devisId) {
-      throw new Error('Un devis existe déjà pour cette intervention');
+    const intervention = requireIntervention(interventionId);
+    if (intervention.devisIds.length > 0) {
+      throw new Error(
+        'Un devis initial existe déjà — utilisez un devis complémentaire'
+      );
     }
 
     const lignesNorm = normalizeLignes(lignes);
@@ -186,6 +324,7 @@ export const garageService = {
       id: store.nextId('dev'),
       interventionId,
       numero: store.nextDevisNumero(),
+      type: 'initial',
       dateCreation: todayISO(),
       dateValidite: addDaysISO(14),
       lignes: lignesNorm,
@@ -193,7 +332,35 @@ export const garageService = {
       statut: 'brouillon',
     };
     store.devis.push(created);
-    intervention.devisId = created.id;
+    intervention.devisIds.push(created.id);
+    return created;
+  },
+
+  async addDevisComplementaire(
+    interventionId: string,
+    lignes: LigneDocument[]
+  ): Promise<Devis> {
+    await wait();
+    const intervention = requireIntervention(interventionId);
+    if (intervention.devisIds.length === 0) {
+      throw new Error('Créez d’abord un devis initial');
+    }
+
+    const lignesNorm = normalizeLignes(lignes);
+    const totaux = calculerTotaux(lignesNorm);
+    const created: Devis = {
+      id: store.nextId('dev'),
+      interventionId,
+      numero: store.nextDevisNumero(),
+      type: 'complementaire',
+      dateCreation: todayISO(),
+      dateValidite: addDaysISO(14),
+      lignes: lignesNorm,
+      ...totaux,
+      statut: 'brouillon',
+    };
+    store.devis.push(created);
+    intervention.devisIds.push(created.id);
     return created;
   },
 
@@ -243,10 +410,7 @@ export const garageService = {
     if (d.statut !== 'accepte') {
       throw new Error('Le devis doit être accepté pour générer une facture');
     }
-    const intervention = store.interventions.find(
-      (i) => i.id === d.interventionId
-    );
-    if (!intervention) throw new Error('Intervention introuvable');
+    const intervention = requireIntervention(d.interventionId);
     if (intervention.factureId) {
       throw new Error('Une facture existe déjà pour cette intervention');
     }
@@ -274,8 +438,7 @@ export const garageService = {
     lignes: LigneDocument[]
   ): Promise<Facture> {
     await wait();
-    const intervention = store.interventions.find((i) => i.id === interventionId);
-    if (!intervention) throw new Error('Intervention introuvable');
+    const intervention = requireIntervention(interventionId);
     if (intervention.factureId) {
       throw new Error('Une facture existe déjà pour cette intervention');
     }
@@ -328,7 +491,10 @@ export const garageService = {
     return store.factures[idx];
   },
 
-  async updateFactureStatut(id: string, statut: FactureStatut): Promise<Facture> {
+  async updateFactureStatut(
+    id: string,
+    statut: FactureStatut
+  ): Promise<Facture> {
     return this.updateFacture(id, { statut });
   },
 };

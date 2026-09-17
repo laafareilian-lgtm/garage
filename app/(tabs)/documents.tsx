@@ -151,6 +151,11 @@ export default function DocumentsScreen() {
                 <FactureBadge statut={item.statut} />
               )}
             </View>
+            {item.kind === 'devis' ? (
+              <Text style={styles.vehicle}>
+                {item.type === 'initial' ? 'Initial' : 'Complémentaire'}
+              </Text>
+            ) : null}
             <Text style={styles.client}>{item.client.nom}</Text>
             <Text style={styles.vehicle}>
               {item.vehicule.plaque} · {item.vehicule.marque}{' '}

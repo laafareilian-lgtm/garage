@@ -25,7 +25,7 @@ export function InterventionCard({ item, onPress }: Props) {
       <Text style={styles.client}>{item.client.nom}</Text>
       <Text style={styles.meta}>
         Entrée {formatDate(item.dateEntree)}
-        {item.motif ? ` · ${item.motif}` : ''}
+        {item.motifDeclare ? ` · ${item.motifDeclare}` : ''}
       </Text>
     </Pressable>
   );

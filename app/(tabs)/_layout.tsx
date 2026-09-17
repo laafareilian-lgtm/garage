@@ -28,10 +28,30 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
+        name="pieces"
+        options={{
+          title: 'Suivi des pièces',
+          tabBarLabel: 'Pièces',
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="cube" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="rappels"
+        options={{
+          title: 'Rappels entretien',
+          tabBarLabel: 'Rappels',
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="alarm" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="documents"
         options={{
           title: 'Devis & Factures',
-          tabBarLabel: 'Documents',
+          tabBarLabel: 'Docs',
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="document-text" size={size} color={color} />
           ),

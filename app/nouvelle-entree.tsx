@@ -8,12 +8,16 @@ import {
   View,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import {
+  buildEtatDesLieux,
+  EtatDesLieuxFields,
+} from '@/components/EtatDesLieuxFields';
 import { ChipSelect, FormField, PrimaryButton } from '@/components/Form';
 import { LoadingState } from '@/components/EmptyState';
 import { Colors } from '@/constants/theme';
 import { garageService } from '@/data/garageService';
 import { todayISO } from '@/utils/format';
-import type { Client, Vehicule } from '@/types';
+import type { Client, NiveauCarburant, Vehicule } from '@/types';
 
 export default function NouvelleEntreeScreen() {
   const router = useRouter();
@@ -38,10 +42,17 @@ export default function NouvelleEntreeScreen() {
   const [plaque, setPlaque] = useState('');
   const [marque, setMarque] = useState('');
   const [modele, setModele] = useState('');
-  const [kilometrage, setKilometrage] = useState('');
-  const [motif, setMotif] = useState('');
+  const [kilometrageVeh, setKilometrageVeh] = useState('');
+  const [motifDeclare, setMotifDeclare] = useState('');
   const [dateEntree, setDateEntree] = useState(todayISO());
   const [dateSortiePrevue, setDateSortiePrevue] = useState('');
+
+  const [etat, setEtat] = useState({
+    kilometrage: '',
+    niveauCarburant: '1/2' as NiveauCarburant,
+    degatsExistants: '',
+    photos: [] as string[],
+  });
 
   const load = useCallback(async () => {
     try {
@@ -56,6 +67,9 @@ export default function NouvelleEntreeScreen() {
         if (veh) {
           setClientId(veh.clientId);
           setVehiculeId(veh.id);
+          if (veh.kilometrage != null) {
+            setEtat((e) => ({ ...e, kilometrage: String(veh.kilometrage) }));
+          }
           const v = await garageService.listVehicules(veh.clientId);
           setVehicules(v);
         }
@@ -78,12 +92,20 @@ export default function NouvelleEntreeScreen() {
   }, [clientId, modeClient]);
 
   async function onSave() {
-    if (!motif.trim()) {
-      Alert.alert('Motif requis', 'Indiquez le motif de l’entrée.');
+    if (!motifDeclare.trim()) {
+      Alert.alert('Motif requis', 'Indiquez le motif déclaré par le client.');
       return;
     }
     if (!dateEntree.trim()) {
       Alert.alert('Date requise', 'Indiquez la date d’entrée.');
+      return;
+    }
+    const etatEntree = buildEtatDesLieux(etat, dateEntree.trim());
+    if (!etatEntree) {
+      Alert.alert(
+        'État des lieux',
+        'Le kilométrage est obligatoire pour l’état d’entrée.'
+      );
       return;
     }
 
@@ -120,9 +142,9 @@ export default function NouvelleEntreeScreen() {
           plaque: plaque.trim().toUpperCase(),
           marque: marque.trim(),
           modele: modele.trim(),
-          kilometrage: kilometrage
-            ? parseInt(kilometrage.replace(/\s/g, ''), 10)
-            : undefined,
+          kilometrage: kilometrageVeh
+            ? parseInt(kilometrageVeh.replace(/\s/g, ''), 10)
+            : etatEntree.kilometrage,
         });
         vid = created.id;
       }
@@ -134,9 +156,10 @@ export default function NouvelleEntreeScreen() {
 
       const intervention = await garageService.createIntervention({
         vehiculeId: vid,
-        motif: motif.trim(),
+        motifDeclare: motifDeclare.trim(),
         dateEntree: dateEntree.trim(),
         dateSortiePrevue: dateSortiePrevue.trim() || undefined,
+        etatEntree,
       });
 
       router.replace(`/intervention/${intervention.id}`);
@@ -230,7 +253,15 @@ export default function NouvelleEntreeScreen() {
             vehicules.map((v) => (
               <Pressable
                 key={v.id}
-                onPress={() => setVehiculeId(v.id)}
+                onPress={() => {
+                  setVehiculeId(v.id);
+                  if (v.kilometrage != null && !etat.kilometrage) {
+                    setEtat((e) => ({
+                      ...e,
+                      kilometrage: String(v.kilometrage),
+                    }));
+                  }
+                }}
                 style={[styles.pick, vehiculeId === v.id && styles.pickActive]}
               >
                 <Text
@@ -272,9 +303,9 @@ export default function NouvelleEntreeScreen() {
             autoCapitalize="words"
           />
           <FormField
-            label="Kilométrage"
-            value={kilometrage}
-            onChangeText={setKilometrage}
+            label="Kilométrage véhicule"
+            value={kilometrageVeh}
+            onChangeText={setKilometrageVeh}
             placeholder="78500"
             keyboardType="numeric"
           />
@@ -284,12 +315,15 @@ export default function NouvelleEntreeScreen() {
       <Text style={styles.section}>Intervention</Text>
       <View style={styles.fields}>
         <FormField
-          label="Motif"
-          value={motif}
-          onChangeText={setMotif}
-          placeholder="Panne déclarée par le client"
+          label="Motif déclaré par le client"
+          value={motifDeclare}
+          onChangeText={setMotifDeclare}
+          placeholder="Ce que le client décrit en arrivant"
           multiline
         />
+        <Text style={styles.hint}>
+          Le diagnostic garagiste se remplit plus tard sur la fiche intervention.
+        </Text>
         <FormField
           label="Date d’entrée (AAAA-MM-JJ)"
           value={dateEntree}
@@ -305,6 +339,9 @@ export default function NouvelleEntreeScreen() {
           autoCapitalize="none"
         />
       </View>
+
+      <Text style={styles.section}>État des lieux à l’entrée</Text>
+      <EtatDesLieuxFields value={etat} onChange={setEtat} />
 
       <PrimaryButton
         title={saving ? 'Enregistrement…' : 'Enregistrer'}
@@ -342,5 +379,5 @@ const styles = StyleSheet.create({
   pickText: { fontWeight: '700', color: Colors.text, fontSize: 15 },
   pickTextActive: { color: Colors.primary },
   pickSub: { color: Colors.textMuted, fontSize: 13, marginTop: 2 },
-  hint: { color: Colors.textMuted, fontSize: 14 },
+  hint: { color: Colors.textMuted, fontSize: 13, lineHeight: 18 },
 });

@@ -83,7 +83,10 @@ export default function DevisScreen() {
           <Text style={styles.numero}>{doc.numero}</Text>
           <DevisBadge statut={doc.statut} />
         </View>
-        <Text style={styles.meta}>Créé le {formatDate(doc.dateCreation)}</Text>
+        <Text style={styles.meta}>
+          {doc.type === 'initial' ? 'Devis initial' : 'Devis complémentaire'} ·
+          Créé le {formatDate(doc.dateCreation)}
+        </Text>
         {doc.dateValidite ? (
           <Text style={styles.meta}>
             Validité {formatDate(doc.dateValidite)}
