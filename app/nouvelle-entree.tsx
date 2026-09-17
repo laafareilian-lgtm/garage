@@ -54,6 +54,35 @@ export default function NouvelleEntreeScreen() {
     photos: [] as string[],
   });
 
+  const [piecesACommander, setPiecesACommander] = useState<
+    { key: string; nom: string; fournisseur: string; prix: string }[]
+  >([]);
+
+  function addPieceRow() {
+    setPiecesACommander((prev) => [
+      ...prev,
+      {
+        key: `p-${Date.now()}-${prev.length}`,
+        nom: '',
+        fournisseur: '',
+        prix: '',
+      },
+    ]);
+  }
+
+  function updatePieceRow(
+    key: string,
+    patch: Partial<{ nom: string; fournisseur: string; prix: string }>
+  ) {
+    setPiecesACommander((prev) =>
+      prev.map((p) => (p.key === key ? { ...p, ...patch } : p))
+    );
+  }
+
+  function removePieceRow(key: string) {
+    setPiecesACommander((prev) => prev.filter((p) => p.key !== key));
+  }
+
   const load = useCallback(async () => {
     try {
       const c = await garageService.listClients();
@@ -160,6 +189,15 @@ export default function NouvelleEntreeScreen() {
         dateEntree: dateEntree.trim(),
         dateSortiePrevue: dateSortiePrevue.trim() || undefined,
         etatEntree,
+        piecesACommander: piecesACommander
+          .filter((p) => p.nom.trim())
+          .map((p) => ({
+            nom: p.nom.trim(),
+            fournisseur: p.fournisseur.trim() || undefined,
+            prixUnitaireEstime: p.prix
+              ? parseFloat(p.prix.replace(',', '.')) || undefined
+              : undefined,
+          })),
       });
 
       router.replace(`/intervention/${intervention.id}`);
@@ -343,6 +381,43 @@ export default function NouvelleEntreeScreen() {
       <Text style={styles.section}>État des lieux à l’entrée</Text>
       <EtatDesLieuxFields value={etat} onChange={setEtat} />
 
+      <Text style={styles.section}>Pièces à commander (optionnel)</Text>
+      <Text style={styles.hint}>
+        Si tu sais déjà qu’il faudra une pièce, ajoute-la ici — elle apparaîtra
+        dans le suivi des pièces.
+      </Text>
+      {piecesACommander.map((p) => (
+        <View key={p.key} style={styles.pieceCard}>
+          <FormField
+            label="Nom de la pièce"
+            value={p.nom}
+            onChangeText={(nom) => updatePieceRow(p.key, { nom })}
+            placeholder="Filtre à huile, plaquettes…"
+          />
+          <FormField
+            label="Fournisseur"
+            value={p.fournisseur}
+            onChangeText={(fournisseur) =>
+              updatePieceRow(p.key, { fournisseur })
+            }
+            placeholder="Optionnel"
+          />
+          <FormField
+            label="Prix estimé"
+            value={p.prix}
+            onChangeText={(prix) => updatePieceRow(p.key, { prix })}
+            placeholder="0"
+            keyboardType="decimal-pad"
+          />
+          <Pressable onPress={() => removePieceRow(p.key)}>
+            <Text style={styles.remove}>Retirer</Text>
+          </Pressable>
+        </View>
+      ))}
+      <Pressable onPress={addPieceRow}>
+        <Text style={styles.addLink}>+ Ajouter une pièce à commander</Text>
+      </Pressable>
+
       <PrimaryButton
         title={saving ? 'Enregistrement…' : 'Enregistrer'}
         onPress={onSave}
@@ -380,4 +455,14 @@ const styles = StyleSheet.create({
   pickTextActive: { color: Colors.primary },
   pickSub: { color: Colors.textMuted, fontSize: 13, marginTop: 2 },
   hint: { color: Colors.textMuted, fontSize: 13, lineHeight: 18 },
+  pieceCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    padding: 12,
+    gap: 10,
+  },
+  addLink: { color: Colors.accent, fontWeight: '700', fontSize: 15 },
+  remove: { color: Colors.danger, fontWeight: '700', fontSize: 14 },
 });

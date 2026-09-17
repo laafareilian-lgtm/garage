@@ -160,11 +160,16 @@ export const garageService = {
     data: CreateInterventionInput
   ): Promise<Intervention> {
     await wait();
+    const aCommander = (data.piecesACommander ?? []).filter((p) =>
+      p.nom.trim()
+    );
     const intervention: Intervention = {
       id: store.nextId('int'),
       travauxEffectues: data.travauxEffectues ?? '',
       pieces: data.pieces ?? [],
-      statut: data.statut ?? 'diagnostic',
+      statut:
+        data.statut ??
+        (aCommander.length > 0 ? 'attente_pieces' : 'diagnostic'),
       devisIds: [],
       vehiculeId: data.vehiculeId,
       dateEntree: data.dateEntree,
@@ -176,6 +181,18 @@ export const garageService = {
       etatEntree: data.etatEntree,
     };
     store.interventions.unshift(intervention);
+
+    for (const p of aCommander) {
+      store.piecesCommandees.push({
+        id: store.nextId('pc'),
+        interventionId: intervention.id,
+        nom: p.nom.trim(),
+        fournisseur: p.fournisseur?.trim() || undefined,
+        prixUnitaireEstime: p.prixUnitaireEstime,
+        statut: 'a_commander',
+      });
+    }
+
     return intervention;
   },
 

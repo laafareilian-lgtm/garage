@@ -146,6 +146,12 @@ export type CreateInterventionInput = Omit<
   pieces?: Piece[];
   statut?: InterventionStatut;
   diagnostic?: string;
+  /** Pièces à commander créées en même temps que l’entrée (suivi logistique). */
+  piecesACommander?: Array<{
+    nom: string;
+    fournisseur?: string;
+    prixUnitaireEstime?: number;
+  }>;
 };
 
 export type UpdateInterventionInput = Partial<
